@@ -1,4 +1,5 @@
 import os
+from typing import Any, Dict, List, Optional, Union
 from fastapi import FastAPI
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
@@ -74,8 +75,11 @@ User input:
 Return only the intent name.
 """)
     chain = LLMChain(llm=llm, prompt=prompt)
+    print(f"[INFO] classify_intent: Processing user input: {input_data[:50]}...")
     result = chain.run(input_data=input_data)
-    return result.strip().lower()
+    intent = result.strip().lower()
+    print(f"[INFO] classify_intent: Classified intent: {intent}")
+    return intent
 
 @tool
 def select_api(intent: str) -> dict:
@@ -100,14 +104,14 @@ Available APIs:
 Respond only with the number of the best API to use.
 """)
     chain = LLMChain(llm=llm, prompt=prompt)
-    print(f"DEBUG select_api: intent={intent}")
+    print(f"[INFO] select_api: Processing intent={intent}")
     result = chain.run(intent=intent, options_text=options_text).strip()
     try:
         selected_index = int(result) - 1
-        print(f"DEBUG select_api: Selected API index {selected_index}, name={api_registry[selected_index]['name']}")
+        print(f"[INFO] select_api: Selected API index {selected_index}, name={api_registry[selected_index]['name']}")
         return api_registry[selected_index]
     except Exception as e:
-        print(f"DEBUG select_api: Error selecting API: {str(e)}")
+        print(f"[ERROR] select_api: Error selecting API: {str(e)}")
         # Return a more descriptive error and include the intent
         return {
             "error": f"API selection failed for intent: {intent}",
@@ -131,12 +135,12 @@ def transform_json(raw_input: str, api_details: dict = None, schema: dict = None
     Returns:
         A dictionary containing the properly formatted data for the API call and API endpoint
     """
-    print(f"DEBUG transform_json: raw_input={raw_input[:50]}..., api_details={api_details}")
+    print(f"[INFO] transform_json: raw_input={raw_input[:50]}..., api_details={api_details}")
     
     # Extract schema from api_details if provided
     if api_details and isinstance(api_details, dict) and 'schema' in api_details:
         schema = api_details.get('schema')
-        print(f"DEBUG transform_json: Using schema from provided API details")
+        print(f"[INFO] transform_json: Using schema from provided API details")
     # Use a default schema if none is provided
     elif schema is None:
         # Try to use schema from the first API that matches
@@ -151,10 +155,10 @@ def transform_json(raw_input: str, api_details: dict = None, schema: dict = None
         
         if api_to_use:
             schema = api_to_use['schema']
-            print(f"DEBUG transform_json: Using schema from {api_to_use['name']}")
+            print(f"[INFO] transform_json: Using schema from {api_to_use['name']}")
         else:
             schema = {"example": "field"}
-            print(f"DEBUG transform_json: No matching API found, using default schema")
+            print(f"[INFO] transform_json: No matching API found, using default schema")
     
     # Create a prompt for the LLM to extract structured data
     prompt = PromptTemplate.from_template("""
@@ -176,7 +180,7 @@ Return ONLY a valid JSON object with the extracted information.
         # Clean the result in case the LLM included backticks or other formatting
         result = result.replace("```json", "").replace("```", "").strip()
         parsed_result = json.loads(result)
-        print(f"DEBUG transform_json: Successfully parsed result")
+        print(f"[INFO] transform_json: Successfully parsed result")
         
         # Create a result that includes both the transformed data and API endpoint
         if api_details and isinstance(api_details, dict) and 'endpoint' in api_details:
@@ -189,11 +193,11 @@ Return ONLY a valid JSON object with the extracted information.
         return parsed_result
     except Exception as e:
         # Fallback to a simple example if JSON parsing fails
-        print(f"DEBUG transform_json: Error parsing result: {str(e)}")
+        print(f"[ERROR] transform_json: Error parsing result: {str(e)}")
         return {"example": "transformed data"}
 
 @tool
-def call_api(api_data: dict = None, endpoint: str = None, payload: dict = None) -> dict:
+def call_api(api_data: Any = None, endpoint: str = None, payload: dict = None) -> dict:
     """
     Call the selected API endpoint with the JSON payload.
     
@@ -209,40 +213,62 @@ def call_api(api_data: dict = None, endpoint: str = None, payload: dict = None) 
     Returns:
         A dictionary containing the API response status and body
     """
-    print(f"DEBUG call_api: Initial args - api_data={api_data}, endpoint={endpoint}, payload={payload}")
+    print(f"[INFO] call_api: Initial args - api_data type: {type(api_data)}, value: {api_data}")
+    
+    # Handle case where api_data is passed as a string (from agent)
+    if isinstance(api_data, str):
+        try:
+            # Try to parse it as JSON
+            print(f"[INFO] call_api: api_data is a string, attempting to parse as JSON")
+            parsed_data = json.loads(api_data)
+            if isinstance(parsed_data, list) and len(parsed_data) > 0:
+                # If it's a list, use the first item as the payload
+                print(f"[INFO] call_api: api_data parsed as a list, using first item as payload")
+                payload = parsed_data[0]
+                endpoint = api_registry[0]['endpoint'] if api_registry else "http://localhost:3001/api/timesheet"
+            elif isinstance(parsed_data, dict):
+                # If it's a dict, use it directly
+                api_data = parsed_data
+                print(f"[INFO] call_api: Parsed string into dictionary: {api_data}")
+            else:
+                print(f"[WARNING] call_api: Could not use parsed string data: {parsed_data}")
+                return {"error": f"Invalid api_data format after parsing: {str(parsed_data)[:100]}..."}
+        except json.JSONDecodeError as e:
+            print(f"[ERROR] call_api: Could not parse api_data as JSON: {str(e)}")
+            return {"error": f"Invalid JSON format in api_data: {api_data[:100]}..."}
     
     # Handle combined api_data (from transform_json)
     if api_data and isinstance(api_data, dict):
         if 'endpoint' in api_data and 'payload' in api_data:
             endpoint = api_data.get('endpoint')
             payload = api_data.get('payload')
-            print(f"DEBUG call_api: Extracted endpoint and payload from api_data")
+            print(f"[INFO] call_api: Extracted endpoint '{endpoint}' and payload from api_data")
         elif endpoint is None and payload is None:
             # api_data itself might be the payload
             if 'endpoint' not in api_data:
                 # Use the first API endpoint by default
-                endpoint = api_registry[0]['endpoint'] if api_registry else "https://example.com/api"
+                endpoint = api_registry[0]['endpoint'] if api_registry else "http://localhost:3001/api/timesheet"
                 payload = api_data
-                print(f"DEBUG call_api: Using default endpoint={endpoint} with api_data as payload")
+                print(f"[INFO] call_api: Using default endpoint={endpoint} with api_data as payload")
     
-    print(f"DEBUG call_api: Final endpoint={endpoint}, payload={payload}")
+    print(f"[INFO] call_api: Final endpoint={endpoint}, payload={payload}")
     
     try:
         # Make a real API call
-        print(f"DEBUG call_api: Making a real API call to {endpoint}")
+        print(f"[INFO] call_api: Making a real API call to {endpoint}")
         response = requests.post(endpoint, json=payload, timeout=10)
-        print(f"DEBUG call_api: Response status code: {response.status_code}")
+        print(f"[INFO] call_api: Response status code: {response.status_code}")
         
         try:
             response_json = response.json()
-            print(f"DEBUG call_api: Response content: {response_json}")
+            print(f"[INFO] call_api: Response content: {response_json}")
             return {"status": response.status_code, "body": response_json}
         except ValueError:
             # Handle non-JSON responses
-            print(f"DEBUG call_api: Non-JSON response: {response.text[:100]}...")
+            print(f"[WARNING] call_api: Non-JSON response: {response.text[:100]}...")
             return {"status": response.status_code, "body": {"raw_response": response.text}}
     except Exception as e:
-        print(f"DEBUG call_api: Error: {str(e)}")
+        print(f"[ERROR] call_api: Error: {str(e)}")
         return {"error": str(e), "endpoint": endpoint, "payload": payload}
 
 llm = AzureChatOpenAI(
@@ -258,22 +284,22 @@ tools = [
     Tool.from_function(
         func=classify_intent,
         name="classify_intent",
-        description="Classify the user's input into one of the predefined intent categories (submit_timesheet, leave_request, expense_claim)"
+        description="Classify the user's input into one of the predefined intent categories (submit_timesheet, leave_request, expense_claim). Returns a string with the intent name."
     ),
     Tool.from_function(
         func=select_api,
         name="select_api",
-        description="Select the most appropriate API from the known registry based on the provided user intent"
+        description="Select the most appropriate API from the known registry based on the provided user intent. Input: intent string from classify_intent. Returns: API details including endpoint and schema."
     ),
     Tool.from_function(
         func=transform_json,
         name="transform_json",
-        description="Transform the raw user input into the format expected by the selected API schema"
+        description="Transform the raw user input into a JSON payload that matches the API schema. Input: raw_input (string) and api_details (dict from select_api). Returns: dict with 'payload' and 'endpoint' fields."
     ),
     Tool.from_function(
         func=call_api,
         name="call_api",
-        description="Call the selected API endpoint with the JSON payload"
+        description="Call the selected API endpoint with the JSON payload. Input: api_data (from transform_json) or endpoint and payload separately. Returns: API response with status and body."
     )
 ]
 
@@ -290,10 +316,23 @@ class InputPayload(BaseModel):
 @app.post("/smart-router")
 async def smart_router(payload: InputPayload):
     try:
+        print(f"[INFO] Starting smart-router processing for input: {payload.input[:50]}...")
         result = agent.run(payload.input)
+        print(f"[INFO] Successfully processed request, agent result: {result[:100]}...")
         return JSONResponse(content={"result": result, "success": True})
     except Exception as e:
+        error_msg = str(e)
+        import traceback
+        stack_trace = traceback.format_exc()
+        print(f"[ERROR] Exception in smart-router endpoint: {error_msg}")
+        print(f"[ERROR] Stack trace:\n{stack_trace}")
+        
+        # Return a more detailed error response
         return JSONResponse(
             status_code=500,
-            content={"error": str(e), "success": False}
+            content={
+                "error": error_msg,
+                "success": False,
+                "trace": stack_trace.split('\n')
+            }
         )
