@@ -21,7 +21,8 @@ api_registry = [
         "intent": "submit_timesheet",
         "name": "PayrollX SubmitTimesheet",
         "description": "Submits a weekly timesheet with work hours and employee ID",
-        "endpoint": "https://example.com/api/timesheet",
+        "endpoint": "http://localhost:3001/api/timesheet/",
+        "method": "POST",
         "schema": {
             "date": "string",
             "hours": "float",
@@ -33,6 +34,7 @@ api_registry = [
         "name": "HR Leave API",
         "description": "Creates a leave request for an employee with start and end date",
         "endpoint": "https://example.com/api/leave",
+        "method": "POST",
         "schema": {
             "start_date": "string",
             "end_date": "string",
@@ -114,22 +116,29 @@ Respond only with the number of the best API to use.
         }
 
 @tool
-def transform_json(raw_input: str, schema: dict = None) -> dict:
+def transform_json(raw_input: str, api_details: dict = None, schema: dict = None) -> dict:
     """
     Transform the raw user input into the format expected by the selected API schema.
     
     This function takes natural language input and converts it to structured JSON
-    that matches the required schema for the API call.
+    that matches the required schema for the API call. It also preserves the API endpoint details.
     
     Args:
         raw_input: The user's request in natural language
+        api_details: The details of the selected API including endpoint (optional)
         schema: The JSON schema definition required by the API (optional)
         
     Returns:
-        A dictionary containing the properly formatted data for the API call
+        A dictionary containing the properly formatted data for the API call and API endpoint
     """
+    print(f"DEBUG transform_json: raw_input={raw_input[:50]}..., api_details={api_details}")
+    
+    # Extract schema from api_details if provided
+    if api_details and isinstance(api_details, dict) and 'schema' in api_details:
+        schema = api_details.get('schema')
+        print(f"DEBUG transform_json: Using schema from provided API details")
     # Use a default schema if none is provided
-    if schema is None:
+    elif schema is None:
         # Try to use schema from the first API that matches
         api_to_use = None
         for api in api_registry:
@@ -160,7 +169,6 @@ Required schema:
 Return ONLY a valid JSON object with the extracted information.
 """)
     
-    print(f"DEBUG transform_json: raw_input={raw_input[:50]}..., schema={schema}")
     chain = LLMChain(llm=llm, prompt=prompt)
     result = chain.run(raw_input=raw_input, schema=schema)
     
@@ -169,6 +177,15 @@ Return ONLY a valid JSON object with the extracted information.
         result = result.replace("```json", "").replace("```", "").strip()
         parsed_result = json.loads(result)
         print(f"DEBUG transform_json: Successfully parsed result")
+        
+        # Create a result that includes both the transformed data and API endpoint
+        if api_details and isinstance(api_details, dict) and 'endpoint' in api_details:
+            # Add metadata to help call_api function
+            return {
+                "payload": parsed_result,
+                "endpoint": api_details.get('endpoint'),
+                "api_name": api_details.get('name', 'Unknown API')
+            }
         return parsed_result
     except Exception as e:
         # Fallback to a simple example if JSON parsing fails
@@ -176,7 +193,7 @@ Return ONLY a valid JSON object with the extracted information.
         return {"example": "transformed data"}
 
 @tool
-def call_api(endpoint: str = None, payload: dict = None) -> dict:
+def call_api(api_data: dict = None, endpoint: str = None, payload: dict = None) -> dict:
     """
     Call the selected API endpoint with the JSON payload.
     
@@ -185,40 +202,48 @@ def call_api(endpoint: str = None, payload: dict = None) -> dict:
     response status and body.
     
     Args:
-        endpoint: The URL of the API endpoint to call
-        payload: The JSON payload to send to the API
+        api_data: Combined API endpoint and payload information (from transform_json)
+        endpoint: The URL of the API endpoint to call (optional if api_data provided)
+        payload: The JSON payload to send to the API (optional if api_data provided)
         
     Returns:
         A dictionary containing the API response status and body
     """
-    print(f"DEBUG call_api: endpoint={endpoint}, payload={payload}")
+    print(f"DEBUG call_api: Initial args - api_data={api_data}, endpoint={endpoint}, payload={payload}")
     
-    # If only one parameter is provided and it's a dict, it might contain both endpoint and payload
-    if endpoint is not None and payload is None and isinstance(endpoint, dict):
-        # Try to extract endpoint and payload from the single parameter
-        payload = endpoint
-        # Use the first API endpoint by default if we can't extract it
-        endpoint = api_registry[0]['endpoint'] if api_registry else "https://example.com/api"
-        print(f"DEBUG call_api: Extracted endpoint={endpoint} from payload")
+    # Handle combined api_data (from transform_json)
+    if api_data and isinstance(api_data, dict):
+        if 'endpoint' in api_data and 'payload' in api_data:
+            endpoint = api_data.get('endpoint')
+            payload = api_data.get('payload')
+            print(f"DEBUG call_api: Extracted endpoint and payload from api_data")
+        elif endpoint is None and payload is None:
+            # api_data itself might be the payload
+            if 'endpoint' not in api_data:
+                # Use the first API endpoint by default
+                endpoint = api_registry[0]['endpoint'] if api_registry else "https://example.com/api"
+                payload = api_data
+                print(f"DEBUG call_api: Using default endpoint={endpoint} with api_data as payload")
+    
+    print(f"DEBUG call_api: Final endpoint={endpoint}, payload={payload}")
     
     try:
-        # For development purposes, we'll simulate the API call
-        # In production, uncomment the actual API call code
-        # response = requests.post(endpoint, json=payload)
-        # return {"status": response.status_code, "body": response.json()}
+        # Make a real API call
+        print(f"DEBUG call_api: Making a real API call to {endpoint}")
+        response = requests.post(endpoint, json=payload, timeout=10)
+        print(f"DEBUG call_api: Response status code: {response.status_code}")
         
-        # Simulation response
-        return {
-            "status": 200, 
-            "body": {
-                "success": True, 
-                "message": f"Successfully processed request to {endpoint}",
-                "data": payload
-            }
-        }
+        try:
+            response_json = response.json()
+            print(f"DEBUG call_api: Response content: {response_json}")
+            return {"status": response.status_code, "body": response_json}
+        except ValueError:
+            # Handle non-JSON responses
+            print(f"DEBUG call_api: Non-JSON response: {response.text[:100]}...")
+            return {"status": response.status_code, "body": {"raw_response": response.text}}
     except Exception as e:
         print(f"DEBUG call_api: Error: {str(e)}")
-        return {"error": str(e)}
+        return {"error": str(e), "endpoint": endpoint, "payload": payload}
 
 llm = AzureChatOpenAI(
     deployment_name=os.getenv("OPENAI_DEPLOYMENT_NAME"),
