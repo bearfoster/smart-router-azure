@@ -98,15 +98,23 @@ Available APIs:
 Respond only with the number of the best API to use.
 """)
     chain = LLMChain(llm=llm, prompt=prompt)
+    print(f"DEBUG select_api: intent={intent}")
     result = chain.run(intent=intent, options_text=options_text).strip()
     try:
         selected_index = int(result) - 1
+        print(f"DEBUG select_api: Selected API index {selected_index}, name={api_registry[selected_index]['name']}")
         return api_registry[selected_index]
-    except:
-        return {"error": "API selection failed"}
+    except Exception as e:
+        print(f"DEBUG select_api: Error selecting API: {str(e)}")
+        # Return a more descriptive error and include the intent
+        return {
+            "error": f"API selection failed for intent: {intent}",
+            "details": str(e),
+            "available_apis": [api["name"] for api in api_registry]
+        }
 
 @tool
-def transform_json(raw_input: str, schema: dict) -> dict:
+def transform_json(raw_input: str, schema: dict = None) -> dict:
     """
     Transform the raw user input into the format expected by the selected API schema.
     
@@ -115,11 +123,30 @@ def transform_json(raw_input: str, schema: dict) -> dict:
     
     Args:
         raw_input: The user's request in natural language
-        schema: The JSON schema definition required by the API
+        schema: The JSON schema definition required by the API (optional)
         
     Returns:
         A dictionary containing the properly formatted data for the API call
     """
+    # Use a default schema if none is provided
+    if schema is None:
+        # Try to use schema from the first API that matches
+        api_to_use = None
+        for api in api_registry:
+            if 'timesheet' in raw_input.lower() and 'timesheet' in api['intent'].lower():
+                api_to_use = api
+                break
+            elif 'leave' in raw_input.lower() and 'leave' in api['intent'].lower():
+                api_to_use = api
+                break
+        
+        if api_to_use:
+            schema = api_to_use['schema']
+            print(f"DEBUG transform_json: Using schema from {api_to_use['name']}")
+        else:
+            schema = {"example": "field"}
+            print(f"DEBUG transform_json: No matching API found, using default schema")
+    
     # Create a prompt for the LLM to extract structured data
     prompt = PromptTemplate.from_template("""
 You are a data extraction assistant. Extract the relevant information from the user input and format it according to the provided schema.
@@ -133,19 +160,23 @@ Required schema:
 Return ONLY a valid JSON object with the extracted information.
 """)
     
+    print(f"DEBUG transform_json: raw_input={raw_input[:50]}..., schema={schema}")
     chain = LLMChain(llm=llm, prompt=prompt)
     result = chain.run(raw_input=raw_input, schema=schema)
     
     try:
         # Clean the result in case the LLM included backticks or other formatting
         result = result.replace("```json", "").replace("```", "").strip()
-        return json.loads(result)
-    except:
+        parsed_result = json.loads(result)
+        print(f"DEBUG transform_json: Successfully parsed result")
+        return parsed_result
+    except Exception as e:
         # Fallback to a simple example if JSON parsing fails
+        print(f"DEBUG transform_json: Error parsing result: {str(e)}")
         return {"example": "transformed data"}
 
 @tool
-def call_api(endpoint: str, payload: dict) -> dict:
+def call_api(endpoint: str = None, payload: dict = None) -> dict:
     """
     Call the selected API endpoint with the JSON payload.
     
@@ -160,6 +191,16 @@ def call_api(endpoint: str, payload: dict) -> dict:
     Returns:
         A dictionary containing the API response status and body
     """
+    print(f"DEBUG call_api: endpoint={endpoint}, payload={payload}")
+    
+    # If only one parameter is provided and it's a dict, it might contain both endpoint and payload
+    if endpoint is not None and payload is None and isinstance(endpoint, dict):
+        # Try to extract endpoint and payload from the single parameter
+        payload = endpoint
+        # Use the first API endpoint by default if we can't extract it
+        endpoint = api_registry[0]['endpoint'] if api_registry else "https://example.com/api"
+        print(f"DEBUG call_api: Extracted endpoint={endpoint} from payload")
+    
     try:
         # For development purposes, we'll simulate the API call
         # In production, uncomment the actual API call code
@@ -176,6 +217,7 @@ def call_api(endpoint: str, payload: dict) -> dict:
             }
         }
     except Exception as e:
+        print(f"DEBUG call_api: Error: {str(e)}")
         return {"error": str(e)}
 
 llm = AzureChatOpenAI(
