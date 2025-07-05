@@ -25,22 +25,19 @@ api_registry = [
         "endpoint": "http://localhost:3001/api/timesheet/",
         "method": "POST",
         "schema": {
-            "date": "string",
-            "hours": "float",
-            "employee_id": "string"
+            "employee_id": "string",
+            "data": "timesheet_data"
         }
     },
     {
         "intent": "leave_request",
         "name": "HR Leave API",
         "description": "Creates a leave request for an employee with start and end date",
-        "endpoint": "https://example.com/api/leave",
+        "endpoint": "http://localhost:3001/api/leave/",
         "method": "POST",
         "schema": {
-            "start_date": "string",
-            "end_date": "string",
             "employee_id": "string",
-            "type": "string"
+            "data": "leave_request_data"
         }
     }
 ]
