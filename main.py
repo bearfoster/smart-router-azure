@@ -22,7 +22,7 @@ api_registry = [
         "intent": "submit_timesheet",
         "name": "PayrollX SubmitTimesheet",
         "description": "Submits a weekly timesheet with work hours and employee ID",
-        "endpoint": "http://localhost:3001/api/timesheet/",
+        "endpoint": "http://localhost:3002/api/timesheet/",
         "method": "POST",
         "schema": {
             "employee_id": "string",
@@ -33,7 +33,7 @@ api_registry = [
         "intent": "leave_request",
         "name": "HR Leave API",
         "description": "Creates a leave request for an employee with start and end date",
-        "endpoint": "http://localhost:3001/api/leave/",
+        "endpoint": "http://localhost:3002/api/leave/",
         "method": "POST",
         "schema": {
             "employee_id": "string",
@@ -222,7 +222,7 @@ def call_api(api_data: Any = None, endpoint: str = None, payload: dict = None) -
                 # If it's a list, use the first item as the payload
                 print(f"[INFO] call_api: api_data parsed as a list, using first item as payload")
                 payload = parsed_data[0]
-                endpoint = api_registry[0]['endpoint'] if api_registry else "http://localhost:3001/api/timesheet"
+                endpoint = api_registry[0]['endpoint'] if api_registry else "http://localhost:3002/api/timesheet"
             elif isinstance(parsed_data, dict):
                 # If it's a dict, use it directly
                 api_data = parsed_data
@@ -244,14 +244,14 @@ def call_api(api_data: Any = None, endpoint: str = None, payload: dict = None) -
             # api_data itself might be the payload
             if 'endpoint' not in api_data:
                 # Use the first API endpoint by default
-                endpoint = api_registry[0]['endpoint'] if api_registry else "http://localhost:3001/api/timesheet"
+                endpoint = api_registry[0]['endpoint'] if api_registry else "http://localhost:3002/api/timesheet"
                 payload = api_data
                 print(f"[INFO] call_api: Using default endpoint={endpoint} with api_data as payload")
     
     print(f"[INFO] call_api: Final endpoint={endpoint}, payload={payload}")
     
     try:
-        # Make a real API call
+        # Make the API call
         print(f"[INFO] call_api: Making a real API call to {endpoint}")
         response = requests.post(endpoint, json=payload, timeout=10)
         print(f"[INFO] call_api: Response status code: {response.status_code}")
@@ -313,9 +313,7 @@ class InputPayload(BaseModel):
 @app.post("/smart-router")
 async def smart_router(payload: InputPayload):
     try:
-        print(f"[INFO] Starting smart-router processing for input: {payload.input[:50]}...")
         result = agent.run(payload.input)
-        print(f"[INFO] Successfully processed request, agent result: {result[:100]}...")
         return JSONResponse(content={"result": result, "success": True})
     except Exception as e:
         error_msg = str(e)
